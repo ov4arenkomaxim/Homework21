@@ -1,0 +1,105 @@
+---
+- name: Install Docker and run Nginx via Docker Compose
+  hosts: web
+  become: true
+
+  vars:
+    app_dir: /opt/nginx-app
+
+  tasks:
+    - name: Wait for SSH / cloud-init to settle
+      ansible.builtin.wait_for_connection:
+        timeout: 180
+
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - python3-docker
+        state: present
+        update_cache: true
+
+    - name: Create keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Docker GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+
+    - name: Install Docker Engine and Docker Compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+        
+    - name: Add ubuntu user to docker group
+      ansible.builtin.user:
+        name: ubuntu
+        groups: docker
+        append: true
+
+    - name: Pull Nginx image
+      community.docker.docker_image:
+        name: nginx
+        tag: stable
+        source: pull
+
+    - name: Create app directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy docker-compose.yml
+      ansible.builtin.copy:
+        dest: "{{ app_dir }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          services:
+            nginx:
+              image: nginx:stable
+              container_name: nginx
+              restart: unless-stopped
+              ports:
+                - "80:80"
+              volumes:
+                - ./index.html:/usr/share/nginx/html/index.html:ro
+
+    - name: Create custom index.html
+      ansible.builtin.copy:
+        dest: "{{ app_dir }}/index.html"
+        mode: "0644"
+        content: |
+          <!DOCTYPE html>
+          <html>
+            <head><title>{{ inventory_hostname }}</title></head>
+            <body style="font-family:sans-serif;text-align:center;margin-top:15%">
+              <h1>Hello from {{ inventory_hostname }}</h1>
+              <p>IP: {{ ansible_host }}</p>
+              <p>Nginx runs in Docker Compose, deployed by Ansible</p>
+            </body>
+          </html>
+
+    - name: Start Nginx with Docker Compose
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        state: present
